@@ -58,6 +58,56 @@ const Piece = styled.img`
   cursor: pointer;
 `;
 
+const HelpButton = styled.button`
+  background-color: #fff;
+  border: 2px solid #000;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  cursor: pointer;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+`;
+
+const Tooltip = styled.div`
+  position: absolute;
+  top: 60px;
+  right: 10px;
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 10px;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  max-width: 350px;
+  word-wrap: break-word;
+`;
+
+const Overlay = styled.div`
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+`;
+
+const MessageBox = styled.div`
+  background: #fff;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  font-size: 24px;
+`;
+
 const initialSetup = [
   ['Brook', 'Bknight', 'Bbishop', 'Bqueen', 'Bking', 'Bbishop', 'Bknight', 'Brook'],
   ['Bpawn', 'Bpawn', 'Bpawn', 'Bpawn', 'Bpawn', 'Bpawn', 'Bpawn', 'Bpawn'],
@@ -68,6 +118,8 @@ const initialSetup = [
   ['Wpawn', 'Wpawn', 'Wpawn', 'Wpawn', 'Wpawn', 'Wpawn', 'Wpawn', 'Wpawn'],
   ['Wrook', 'Wknight', 'Wbishop', 'Wqueen', 'Wking', 'Wbishop', 'Wknight', 'Wrook']
 ];
+
+
 
 const pieceImages = {
   'Wpawn': whitePawn,
@@ -84,10 +136,24 @@ const pieceImages = {
   'Brook': blackRook,
 };
 
+const parseMove = (move) => {
+  if (!move || move.length !== 1) return [null, null];
+  const col = move[0].charCodeAt(0) - 97; // 'a'의 ASCII 값은 97
+  const row = 8 - parseInt(move[0][1], 10); // '8'은 체스판의 첫 번째 행
+  return [row, col];
+};
+
 function App() {
   const [board, setBoard] = useState(initialSetup);
   const [selectedPiece, setSelectedPiece] = useState(null);
   const [moveHistory, setMoveHistory] = useState([]);
+  const [turn, setTurn] = useState('W');
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [isGameOver, setIsGameOver] = useState(true);
+
+  const toggleTooltip = () => {
+    setShowTooltip(!showTooltip);
+  };
 
   const isValidMove = (piece, fromRow, fromCol, toRow, toCol) => {
     if (piece[1] === 'p') {
@@ -177,30 +243,98 @@ function App() {
     return false;
   };
 
-  const handleSquareClick = (row, col) => {
+  const handleSquareClick = async (row, col) => {
     if (selectedPiece) {
       const { piece, row: fromRow, col: fromCol } = selectedPiece;
-
+  
       if (fromRow === row && fromCol === col) {
         setSelectedPiece(null);
       } else if (isValidMove(piece, fromRow, fromCol, row, col)) {
+        if (piece[0] !== turn) {
+          alert("상대방의 차례입니다.");
+          setSelectedPiece(null);
+          return;
+        }
+  
         const newBoard = board.map((r) => r.slice());
         newBoard[row][col] = board[fromRow][fromCol];
         newBoard[fromRow][fromCol] = null;
         setBoard(newBoard);
         setSelectedPiece(null);
-
+  
         const move = piece[1] === 'p'
           ? `${String.fromCharCode(97 + col)}${8 - row}` // 폰의 이동
           : `${piece[1].toUpperCase()}${board[row][col] ? 'x' : ''}${String.fromCharCode(97 + col)}${8 - row}`;
-
-        setMoveHistory([...moveHistory, move]);
-        console.log(move); // 콘솔에 출력
+  
+        const newMoveHistory = [...moveHistory, move];
+        setMoveHistory(newMoveHistory);
+        console.log('My move:', move); // 클라이언트가 수행한 이동을 출력
+  
+        // Turn switching logic
+        setTurn(turn === 'W' ? 'B' : 'W');
+  
+        // Send move history to Flask server
+        try {
+          const response = await fetch('http://localhost:5000/process_moves', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ moves: newMoveHistory }),
+          });
+  
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+  
+          const result = await response.json();
+          console.log('Server response:', result); // 서버의 응답을 출력하여 확인
+  
+          // Parse and make the opponent's move
+          const opponentMove = result.response_move;
+          console.log('Opponent move:', opponentMove); // 상대방의 이동을 출력하여 확인
+  
+          const [toRow, toCol] = parseMove(opponentMove);
+  
+          if (toRow !== null && toCol !== null) {
+            const pieces = [];
+            for (let rowIndex = 0; rowIndex < newBoard.length; rowIndex++) {
+              for (let colIndex = 0; colIndex < newBoard[rowIndex].length; colIndex++) {
+                const piece = newBoard[rowIndex][colIndex];
+                if (piece && piece[0] === 'B' && isValidMove(piece, rowIndex, colIndex, toRow, toCol)) {
+                  pieces.push({ piece, row: rowIndex, col: colIndex });
+                }
+              }
+            }
+  
+            if (piece) {
+              const [fromRow, fromCol] = piece;
+              newBoard[toRow][toCol] = newBoard[fromRow][fromCol];
+              newBoard[fromRow][fromCol] = null;
+              setBoard(newBoard);
+  
+              const opponentMoveHistory = [...newMoveHistory, opponentMove];
+              setMoveHistory(opponentMoveHistory);
+  
+              setTurn(turn === 'W' ? 'B' : 'W');
+            } else {
+              console.error('Invalid move received from server');
+            }
+          } else {
+            console.error('Invalid move format received from server');
+          }
+        } catch (error) {
+          console.error('There was a problem with the fetch operation:', error);
+        }
       } else {
         alert("유효하지 않은 이동입니다.");
         setSelectedPiece(null);
       }
     } else if (board[row][col]) {
+      if (board[row][col][0] !== turn) {
+        alert("상대방의 차례입니다.");
+        return;
+      }
       setSelectedPiece({ piece: board[row][col], row, col });
     }
   };
@@ -231,6 +365,19 @@ function App() {
   return (
     <Body>
       <Header></Header>
+      <HelpButton onClick={toggleTooltip}>?</HelpButton>
+      {showTooltip && (
+        <Tooltip>
+          현재 상황에서 가장 유리한 수는 e5입니다. e5는 체스판의 중앙을 통제하는 좋은 수입니다. 중앙 통제는 체스 게임에서 중요한 요소 중 하나로, 게임 초반에 중앙을 장악하면 말들을 보다 자유롭게 움직일 수 있습니다. 또한 다양한 오프닝으로 발전할 수 있는 유연한 수입니다. 예를 들어, 루이 로페즈(스페인 오프닝), 이탈리아 게임, 스코치 게임, 피아노 게임 등 여러 유명한 오프닝으로 이어질 수 있습니다.
+        </Tooltip>
+      )}
+      {isGameOver && (
+        <Overlay>
+          <MessageBox>
+            유저 승리!
+          </MessageBox>
+        </Overlay>
+      )}
       <BoardBox>
         <BoardContainer>{renderBoard()}</BoardContainer>
       </BoardBox>
